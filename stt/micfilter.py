@@ -116,7 +116,10 @@ class Filter:
             self.res_floor = res_e  # fast down: track the quiet
         else:
             self.res_floor += 0.002 * (res_e - self.res_floor)  # slow up
-        opens_at = max(self.res_floor * 10 ** (self.gate_db / 20), 0.02)
+        # Decay so the floor can never get stuck high forever (constant-hash
+        # rooms would otherwise weld the gate shut: complete silence bug).
+        self.res_floor *= 0.9995
+        opens_at = min(max(self.res_floor * 10 ** (self.gate_db / 20), 0.02), 0.10)
         if res_e > opens_at:
             self.hang = self.HANG_FRAMES
         if self.hang > 0:
