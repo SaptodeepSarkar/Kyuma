@@ -1,0 +1,7 @@
+.venv/
+models/
+model-server/vendor/
+*.gguf
+__pycache__/
+*.pyc
+*.log
