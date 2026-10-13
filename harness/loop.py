@@ -213,10 +213,14 @@ def _default_mic_target() -> str | None:
                              capture_output=True, text=True, timeout=5).stdout
     except Exception:  # noqa: BLE001
         return None
-    alsa = [ln.split()[1] for ln in out.splitlines() if "\talsa_input." in ln]
+    lines = out.splitlines()
+    for ln in lines:  # our global filtered mic wins when the service runs
+        if "\tkyuma_mic" in ln:
+            return ln.split()[1]
+    alsa = [ln.split()[1] for ln in lines if "\talsa_input." in ln]
     if alsa:
         return alsa[0]
-    non_bt = [ln.split()[1] for ln in out.splitlines()
+    non_bt = [ln.split()[1] for ln in lines
               if "bluez" not in ln and "monitor" not in ln]
     return non_bt[0] if non_bt else None
 
