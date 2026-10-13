@@ -105,13 +105,18 @@ def denoise(path_in: str, path_out: str, noise_ms: int = 300, gate_db: float = 1
         pspecs = [fft([complex(v, 0) for v in fr]) for fr in pframes]
         prof_src = [[abs(b) for b in sp[: N // 2 + 1]] for sp in pspecs]
         prof_frames = pframes
+    # 3b. Noise profile = per-bin MEDIAN over calibration frames, skipping the
+    # first ~200ms (capture-device settle transient: often a full-scale
+    # flatline that poisons minima/mean profiles with near-zero bins and
+    # silently disables subtraction).
     need = max(1, int(noise_ms / 1000 * RATE / HOP))
-    order = sorted(range(len(prof_frames)), key=lambda i: frame_rms(prof_frames[i]))
-    prof = [0.0] * (N // 2 + 1)
-    for i in order[:need]:
-        for b in range(len(prof)):
-            prof[b] += prof_src[i][b]
-    prof = [p / need for p in prof]
+    pool = list(range(6, len(prof_frames)))
+    stride = max(1, len(pool) // max(need * 4, 1))
+    pick = pool[::stride][: need * 4] or pool[:1]
+    prof = []
+    for b in range(N // 2 + 1):
+        col = sorted(prof_src[i][b] for i in pick)
+        prof.append(col[len(col) // 2])
 
     # 4. Over-subtraction with floor (kills steady hash, keeps speech bins).
     floor = 10 ** (floor_db / 20)
@@ -137,7 +142,7 @@ def denoise(path_in: str, path_out: str, noise_ms: int = 300, gate_db: float = 1
 
     # 6. Broadband gate with hangover: below floor -> hard zero (TRUE silence).
     #    Floor tracks the profile energy so speech (10dB+ above) always opens.
-    prof_e = frame_rms([v for i in order[:need] for v in prof_frames[i]]) or 1e-6
+    prof_e = frame_rms([v for i in pick for v in prof_frames[i]]) or 1e-6
     thr = prof_e * 10 ** (gate_db / 20)
     hang = int(0.25 * RATE / HOP)  # 250ms hangover
     open_left = 0

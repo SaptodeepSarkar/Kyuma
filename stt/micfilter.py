@@ -76,10 +76,17 @@ class Filter:
 
     def _frame(self, spec: list[complex], mag: list[float]) -> list[float]:
         if self.prof is None:
+            self.skip = getattr(self, "skip", 8)  # device settle transient first
+            if self.skip > 0:
+                self.skip -= 1
+                return []  # output silence, not garbage
             self.calib.append(mag)
-            if len(self.calib) >= 32:  # first ~0.5s = noise floor
-                self.prof = [sum(c[b] for c in self.calib) / len(self.calib)
-                             for b in range(len(mag))]
+            if len(self.calib) >= 32:  # next ~0.5s = noise floor
+                cols = len(mag)
+                self.prof = []
+                for b in range(cols):
+                    col = sorted(c[b] for c in self.calib)
+                    self.prof.append(col[len(col) // 2])  # median: robust
             else:
                 return []  # calibrating: output silence, not garbage
         assert self.prof is not None

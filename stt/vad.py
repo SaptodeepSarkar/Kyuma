@@ -120,8 +120,12 @@ def process_wav(path: str, on_chunk=None,
 
 def capture_live(duration_s: float = 5.0, target: str | None = None,
                  config: VadConfig = VadConfig(),
-                 on_chunk=None) -> list[SpeechChunk]:
-    """Record the mic via ``pw-record`` for ``duration_s`` and VAD the result."""
+                 on_chunk=None, skip_ms: int = 250) -> list[SpeechChunk]:
+    """Record the mic via ``pw-record`` for ``duration_s`` and VAD the result.
+
+    Drops the first ``skip_ms`` (device settle transient: often full-scale
+    flatline that would fake a speech chunk and poison noise profiles).
+    """
     exe = shutil.which("pw-record")
     if exe is None:
         raise RuntimeError("pw-record not found: no mic backend on this host")
@@ -140,4 +144,13 @@ def capture_live(duration_s: float = 5.0, target: str | None = None,
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()
+    if skip_ms > 0:
+        with wave.open(tmp, "rb") as w:
+            params = w.getparams()
+            rate = w.getframerate()
+            raw = w.readframes(w.getnframes())
+        cut = min(len(raw), int(rate * skip_ms / 1000) * params.sampwidth * params.nchannels)
+        with wave.open(tmp, "wb") as w:
+            w.setparams(params)
+            w.writeframes(raw[cut:])
     return process_wav(tmp, on_chunk=on_chunk, config=config)
