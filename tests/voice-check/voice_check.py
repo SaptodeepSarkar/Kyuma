@@ -144,6 +144,7 @@ def collect(samples_dir: str, phrases: list[str], target: str | None) -> list[st
     for i, phrase in enumerate(phrases):
         path = os.path.join(samples_dir, slug(phrase) + ".wav")
         print(f"[{i + 1}/{len(phrases)}] Say:  \"{phrase}\"")
+        print("  NOTE: stay silent ~1s after Enter (noise calibration), then speak.")
         input("  press Enter to START recording ... ")
         cmd = ["pw-record", "--rate", "16000", "--channels", "1", "--format", "s16"]
         if target:
