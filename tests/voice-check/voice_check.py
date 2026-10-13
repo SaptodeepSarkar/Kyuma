@@ -1,12 +1,10 @@
 """Voice-pipeline check: is it the mic or the pipeline?
 
-Tells you what to say, records it, then runs the REAL chain on your
-recording (VAD -> STT -> buffer -> decide). Dry-run by default: nothing
-acts on your desktop. --act also dispatches (volume WILL change etc).
-
- verdict logic: recording works + STT hears your words => pipeline OK,
- problem is live-mic path (source/gain). STT hears nothing => speak
- louder / pick another mic (--list-mics, --mic-target).
+Two modes:
+  collect: prompts you phrase by phrase ("say volume up"), records between
+    two Enters, saves one wav per phrase: --collect tests/voice-check/samples
+  analyze: runs the REAL chain (VAD -> STT -> buffer -> decide) on a wav or
+    a whole samples dir: --wav f.wav / --analyze-dir DIR (dry-run, --act dispatches)
 """
 from __future__ import annotations
 
@@ -135,6 +133,37 @@ def analyze(wav: str, expect_action: str, server: str | None) -> dict:
     return out
 
 
+def slug(s: str) -> str:
+    return "".join(c if c.isalnum() else "_" for c in s.lower()).strip("_")
+
+
+def collect(samples_dir: str, phrases: list[str], target: str | None) -> list[str]:
+    """Prompt per phrase, record between two Enters, save <slug>.wav."""
+    os.makedirs(samples_dir, exist_ok=True)
+    saved = []
+    for i, phrase in enumerate(phrases):
+        path = os.path.join(samples_dir, slug(phrase) + ".wav")
+        print(f"[{i + 1}/{len(phrases)}] Say:  \"{phrase}\"")
+        input("  press Enter to START recording ... ")
+        cmd = ["pw-record", "--rate", "16000", "--channels", "1", "--format", "s16"]
+        if target:
+            cmd += ["--target", target]
+        cmd.append(path)
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        input("  recording ... press Enter to STOP ... ")
+        proc.send_signal(signal.SIGINT)
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+        size = os.path.getsize(path) if os.path.exists(path) else 0
+        print(f"  saved {path} ({size // 1024} KB)")
+        saved.append(path)
+    print(f"done: {len(saved)} samples in {samples_dir}")
+    return saved
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--list-mics", action="store_true")
@@ -143,17 +172,41 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--case", type=int, default=0, help=f"0..{len(CASES) - 1}")
     ap.add_argument("--act", action="store_true", help="REALLY dispatch (acts on desktop)")
     ap.add_argument("--wav", default=None, help="skip recording, analyze this wav")
+    ap.add_argument("--collect", default=None, metavar="DIR",
+                    help="prompt every phrase and save one wav per phrase into DIR")
+    ap.add_argument("--analyze-dir", default=None, metavar="DIR",
+                    help="run the pipeline on every wav in DIR, print verdicts")
     args = ap.parse_args(argv)
 
     if args.list_mics:
         print("\n".join(list_mics()))
         return 0
-    if shutil.which("pw-record") is None:
+    if shutil.which("pw-record") is None and args.wav is None and args.analyze_dir is None:
         print("pw-record not found: no mic backend")
         return 2
 
-    say, expect = CASES[args.case % len(CASES)]
     target = args.mic_target or default_mic()
+
+    if args.collect:
+        phrases = [say for say, _ in CASES]
+        collect(args.collect, phrases, target)
+        return 0
+
+    if args.analyze_dir:
+        server = pick_server()
+        print(f"server: {server or 'NONE - decide untested'}")
+        wavs = sorted(f for f in os.listdir(args.analyze_dir) if f.endswith(".wav"))
+        for f in wavs:
+            wav = os.path.join(args.analyze_dir, f)
+            say = f[:-4].replace("_", " ")
+            expect = next((a for s, a in CASES if slug(s) == f[:-4]), "?")
+            rep = analyze(wav, expect, server)
+            print(f"--- {f} (said {say!r})")
+            print(f"    STT: {rep.get('stt_text', '(none)')!r} -> {rep.get('decide')}")
+            print(f"    VERDICT: {rep.get('verdict')}")
+        return 0
+
+    say, expect = CASES[args.case % len(CASES)]
     server = pick_server()
     print(f"mic: {target or 'default'} | server: {server or 'NONE - decide untested'}")
 
