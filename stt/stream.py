@@ -8,11 +8,13 @@ lands; until then callers feed raw chunks straight here).
 
 import json
 
+from harness.contracts import Word
+
 SAMPLE_RATE = 16000
 
 
 def _words(result, t):
-    return [{"w": w["word"], "t": float(t)} for w in result.get("result", [])]
+    return [Word(w["word"], float(t)) for w in result.get("result", [])]
 
 
 class StreamingRecognizer:
@@ -33,7 +35,7 @@ class StreamingRecognizer:
         if self.rec.AcceptWaveform(pcm):
             return [], _words(json.loads(self.rec.Result()), t)
         text = json.loads(self.rec.PartialResult()).get("partial", "").strip()
-        partial = [{"w": w, "t": float(t)} for w in text.split()] if text else []
+        partial = [Word(w, float(t)) for w in text.split()] if text else []
         return partial, []
 
     def finalize(self):
