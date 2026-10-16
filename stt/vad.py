@@ -27,8 +27,8 @@ class VadConfig:
     min_silence_ms: int = 300  # consecutive silence frames needed to close a chunk
     adaptive: bool = False    # live capture turns this on; file fixtures keep
                               # the fixed threshold (a constant tone has no floor)
-    margin_db: float = 9.0    # speech must beat the floor by this much
-    floor_alpha: float = 0.05  # noise-floor tracker speed (per frame)
+    margin_db: float = 3.0    # measured: this mic gives only ~4.7dB speech-over-floor
+    floor_alpha: float = 0.01  # slow up: a 2s utterance must not raise its own gate
 
 
 @dataclass
