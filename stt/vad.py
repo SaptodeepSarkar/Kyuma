@@ -22,9 +22,13 @@ from dataclasses import dataclass, field
 @dataclass
 class VadConfig:
     frame_ms: int = 30        # scoring frame length
-    threshold_rms: float = 500.0  # frames at/above this RMS count as speech
+    threshold_rms: float = 500.0  # floor when adaptive is off (see below)
     min_speech_ms: int = 90   # consecutive speech frames needed to open a chunk
     min_silence_ms: int = 300  # consecutive silence frames needed to close a chunk
+    adaptive: bool = False    # live capture turns this on; file fixtures keep
+                              # the fixed threshold (a constant tone has no floor)
+    margin_db: float = 9.0    # speech must beat the floor by this much
+    floor_alpha: float = 0.05  # noise-floor tracker speed (per frame)
 
 
 @dataclass
@@ -59,9 +63,26 @@ def process_pcm(pcm: bytes, sample_rate: int,
     last_speech_frame = 0
 
     n_frames = len(pcm) // frame_bytes
+    # Adaptive gate: a constant loud hash (~20k RMS on this laptop's builtin
+    # mic) sits far above any fixed 500-RMS threshold, so the gate stayed open
+    # every window and Vosk was fed noise (phantom words). Track the floor and
+    # require speech to beat it by margin_db.
+    floor = None
+    margin = 10 ** (config.margin_db / 20)
     for i in range(n_frames):
         frame = pcm[i * frame_bytes:(i + 1) * frame_bytes]
-        speech = _frame_rms(frame) >= config.threshold_rms
+        rms = _frame_rms(frame)
+        if config.adaptive:
+            if floor is None:
+                floor = rms
+            elif rms < floor:
+                floor = rms                      # fast down: nice quiet is real
+            else:
+                floor += config.floor_alpha * (rms - floor)
+            gate = max(floor * margin, config.threshold_rms)
+            speech = rms >= gate
+        else:
+            speech = rms >= config.threshold_rms
         if not in_chunk:
             run_speech = run_speech + 1 if speech else 0
             if run_speech >= need_speech:
@@ -148,7 +169,10 @@ def capture_live(duration_s: float = 5.0, target: str | None = None,
 
     Drops the first ``skip_ms`` (device settle transient: often full-scale
     flatline that would fake a speech chunk and poison noise profiles).
-    """
+    Enables the adaptive noise-floor gate: this laptop's builtin mic has a
+    constant hash far above any fixed threshold, which held the gate open."""
+    from dataclasses import replace
+    config = replace(config, adaptive=True) if not config.adaptive else config
     exe = shutil.which("pw-record")
     if exe is None:
         raise RuntimeError("pw-record not found: no mic backend on this host")
