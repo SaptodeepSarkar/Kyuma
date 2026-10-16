@@ -62,6 +62,7 @@ Rules:
 - web_search: ONLY for questions or explicit search verbs ("search", "google", "look up", "what is", "who is"). Plain statements, opinions, and chatter are NEVER web_search. e.g. "what is the time in tokyo" -> {"action":"web_search","args":{"query":"time in tokyo"}}; "the quarterly results were pretty good" -> noop; "I wonder what's for lunch" -> noop.
 - "go to" disambiguation: "go to" + site/domain/dot-com = open_website; "go to" + app name = focus_app. "go to" NEVER means focus_website/focus_window unless the sentence contains "tab"/"window". e.g. "go to vscode" has no word "window" -> focus_app, never focus_window.
 - music: play/pause/next/previous/skip/stop + song/music/track. e.g. "skip this track" -> {"action":"music","args":{"op":"next"}}
+  "skip", "skip this", "next song", "next track" ALWAYS mean music-next, never noop.
 - If the sentence is NOT a command (greeting, statement, opinion, dictation, gibberish, thinking aloud), output {"action":"noop","args":{}}. When unsure between a real action and noop, choose noop. Never guess a real action for non-commands.
 - Output compact JSON on one line, no other text."""
 
