@@ -38,8 +38,8 @@ typedef struct _LADSPA_Descriptor {
 } LADSPA_Descriptor;
 #define LADSPA_PORT_INPUT 0x1
 #define LADSPA_PORT_OUTPUT 0x2
-#define LADSPA_PORT_AUDIO 0x4
-#define LADSPA_PORT_CONTROL 0x8
+#define LADSPA_PORT_CONTROL 0x4
+#define LADSPA_PORT_AUDIO 0x8
 #define LADSPA_HINT_BOUNDED_BELOW 0x1
 #define LADSPA_HINT_BOUNDED_ABOVE 0x2
 #define LADSPA_HINT_DEFAULT_0 0x10
@@ -47,47 +47,120 @@ typedef struct _LADSPA_Descriptor {
 #define LADSPA_HINT_DEFAULT_50 0xC0
 #define LADSPA_PROPERTY_HARD_RT_CAPABLE 0x1
 
-/* ---- rnnoise suppressor ---- */
+/* ---- rnnoise suppressor ----
+ * Graph runs at 48kHz but RNNoise is 16kHz-only: 3:1 polyphase resample
+ * around the core (31-tap Hamming sinc, fc~7kHz). 1440 in = 480 core = 1440 out.
+ */
 #define RN_FRAME 480
+#define UP 3
+#define IN_FRAME (RN_FRAME * UP)
+#define FIR_TAPS 31
 typedef struct {
     DenoiseState *st;
     LADSPA_Data *in, *out, *vad_thr;
-    float buf[RN_FRAME];
-    float fifo[4096]; /* latency line; produced/emitted counters, never negative */
+    float buf[IN_FRAME];
+    float fir[FIR_TAPS];
+    float dx[FIR_TAPS];  /* decimation history (previous block tail) */
+    float ux[FIR_TAPS];  /* interpolation history (previous stuffed tail) */
+    float fifo[16384];
     int fill, fifo_w, fifo_r;
     long produced, emitted;
 } RNInst;
 
+static void fir_init(float *h) {
+    /* Hamming-windowed sinc, cutoff 0.145 (~7kHz @48k): kills alias/images. */
+    for (int i = 0; i < FIR_TAPS; i++) {
+        int m = i - FIR_TAPS / 2;
+        float s = (m == 0) ? 2 * 0.145f : sinf(2 * 3.14159265f * 0.145f * m) / (3.14159265f * m);
+        float w = 0.54f - 0.46f * cosf(2 * 3.14159265f * i / (FIR_TAPS - 1));
+        h[i] = s * w;
+    }
+    float g = 0, dc = 0;
+    for (int i = 0; i < FIR_TAPS; i++) { g += h[i]; }
+    for (int i = 0; i < FIR_TAPS; i++) h[i] /= g;
+    (void)dc;
+}
+
 static LADSPA_Handle rn_inst(const LADSPA_Descriptor *d, unsigned long rate) {
     (void)d; (void)rate;
     RNInst *s = calloc(1, sizeof *s);
-    if (s) s->st = rnnoise_create(NULL);
+    if (s) {
+        s->st = rnnoise_create(NULL);
+        fir_init(s->fir);
+    }
     return s;
 }
 static void rn_connect(LADSPA_Handle h, unsigned long p, LADSPA_Data *d) {
     RNInst *s = h;
     if (p == 0) s->in = d; else if (p == 1) s->out = d; else s->vad_thr = d;
 }
+/* 48k -> 16k: FIR over [history|buf], take every 3rd. History = last FIR_TAPS-1
+ * input samples so block boundaries filter seamlessly. */
+static int decim(RNInst *s, float out480[RN_FRAME]) {
+    for (int k = 0; k < RN_FRAME; k++) {
+        float y = 0;
+        for (int t = 0; t < FIR_TAPS; t++) {
+            int i = k * UP - t; /* causal: current + past only */
+            float x = (i < 0) ? s->dx[(FIR_TAPS - 1) + i] : s->buf[i];
+            y += x * s->fir[t];
+        }
+        out480[k] = y;
+    }
+    memcpy(s->dx, s->buf + IN_FRAME - (FIR_TAPS - 1), (FIR_TAPS - 1) * sizeof(float));
+    return 1;
+}
+/* 16k -> 48k: zero-stuff x3 then FIR (gain x3 to compensate). Stateless per
+ * frame plus ux tail from previous frame for seamless boundaries. */
+static void interp(RNInst *s, const float in480[RN_FRAME], float out1440[IN_FRAME]) {
+    /* stuffed stream = previous tail (ux holds last FIR_TAPS-1 stuffed outputs *
+     * as input-side history): filter over [ux | current stuffed block]. */
+    for (int k = 0; k < IN_FRAME; k++) {
+        float y = 0;
+        for (int t = 0; t < FIR_TAPS; t++) {
+            int idx = k + (FIR_TAPS - 1) - t;
+            float x;
+            if (idx < FIR_TAPS - 1) {
+                x = s->ux[idx];
+            } else {
+                int ok = idx - (FIR_TAPS - 1);
+                x = ((ok % UP) == 0) ? in480[ok / UP] * UP : 0.0f;
+            }
+            y += x * s->fir[t];
+        }
+        out1440[k] = y;
+    }
+    /* save tail of THIS block's stuffed stream for next frame */
+    for (int t = 0; t < FIR_TAPS - 1; t++) {
+        int ok = IN_FRAME - (FIR_TAPS - 1) + t;
+        s->ux[t] = ((ok % UP) == 0) ? in480[ok / UP] * UP : 0.0f;
+    }
+}
 static void rn_run(LADSPA_Handle h, unsigned long n) {
     RNInst *s = h;
+    if (!s || !s->in || !s->out) return; /* host wired ports yet? never crash graph */
     float thr = s->vad_thr ? *s->vad_thr : 50.0f;
     for (unsigned long i = 0; i < n; i++) {
         s->buf[s->fill++] = s->in[i];
-        if (s->fill == RN_FRAME) {
-            float denoised[RN_FRAME];
-            float vad = rnnoise_process_frame(s->st, denoised, s->buf);
-            float gate = (vad * 100.0f >= thr) ? 1.0f : 0.001f; /* -60dB, no voice */
-            for (int j = 0; j < RN_FRAME; j++) {
-                s->fifo[s->fifo_w] = denoised[j] * gate;
-                s->fifo_w = (s->fifo_w + 1) % 4096;
+        if (s->fill == IN_FRAME) {
+            float down[RN_FRAME], denoised[RN_FRAME], up[IN_FRAME];
+            decim(s, down);
+            /* RNNoise does its own suppression — no extra VAD gate.
+             * The old gate (VAD*100 >= thr ? 1 : 0.001) muted speech
+             * on this noisy laptop mic and OBS/Kyuma got digital zeros. */
+            (void)thr;
+            rnnoise_process_frame(s->st, denoised, down);
+            interp(s, denoised, up);
+            for (int j = 0; j < IN_FRAME; j++) {
+                s->fifo[s->fifo_w] = up[j];
+                s->fifo_w = (s->fifo_w + 1) % 16384;
                 s->produced++;
             }
             s->fill = 0;
         }
-        /* constant 10ms latency: emit only samples 480+ old */
-        if (s->produced - s->emitted > RN_FRAME) {
+        /* constant 30ms latency: emit only samples 1440+ old */
+        if (s->produced - s->emitted > IN_FRAME) {
             s->out[i] = s->fifo[s->fifo_r];
-            s->fifo_r = (s->fifo_r + 1) % 4096;
+            s->fifo_r = (s->fifo_r + 1) % 16384;
             s->emitted++;
         } else {
             s->out[i] = 0.0f;
@@ -132,6 +205,7 @@ static void lim_connect(LADSPA_Handle h, unsigned long p, LADSPA_Data *d) {
 }
 static void lim_run(LADSPA_Handle h, unsigned long n) {
     LimInst *s = h;
+    if (!s || !s->in || !s->out) return;
     /* 50ms release at 48k: coeff per sample */
     const float rel = expf(-1.0f / (0.05f * 48000.0f));
     float ceil_lin = powf(10.0f, (s->thresh_db ? *s->thresh_db : -3.0f) / 20.0f);

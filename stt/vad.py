@@ -97,6 +97,26 @@ def process_pcm(pcm: bytes, sample_rate: int,
     return chunks
 
 
+def _resample_mono(pcm: bytes, src_rate: int, dst_rate: int = 16000) -> bytes:
+    """Mono s16le -> dst_rate. Integer-ratio block average (crude lowpass,
+    no alias garbage); linear interp otherwise. STT-grade, not hi-fi."""
+    if src_rate == dst_rate:
+        return pcm
+    n = len(pcm) // 2
+    samples = struct.unpack("<%dh" % n, pcm)
+    if src_rate % dst_rate == 0:
+        step = src_rate // dst_rate
+        out = [sum(samples[i * step:(i + 1) * step]) // step
+               for i in range(n // step)]
+    else:
+        m = int(n * dst_rate / src_rate)
+        out = [int(samples[int(i * n / m)] +
+                   (samples[min(n - 1, int(i * n / m) + 1)] -
+                    samples[int(i * n / m)]) * ((i * n / m) % 1))
+               for i in range(m)]
+    return struct.pack("<%dh" % len(out), *[max(-32768, min(32767, v)) for v in out])
+
+
 def process_wav(path: str, on_chunk=None,
                 config: VadConfig = VadConfig()) -> list[SpeechChunk]:
     """VAD over a wav file. ``on_chunk`` (the STT stub hook) is called once
@@ -111,6 +131,9 @@ def process_wav(path: str, on_chunk=None,
         mono = [sum(samples[i * nch:(i + 1) * nch]) // nch
                 for i in range(len(samples) // nch)]
         raw = struct.pack("<%dh" % len(mono), *mono)
+    if rate != 16000:  # STT models are 16k-only; convert file input
+        raw = _resample_mono(raw, rate, 16000)
+        rate = 16000
     chunks = process_pcm(raw, rate, config)
     if on_chunk is not None:
         for c in chunks:
