@@ -214,8 +214,11 @@ def _default_mic_target() -> str | None:
     except Exception:  # noqa: BLE001
         return None
     lines = out.splitlines()
-    for ln in lines:  # our global filtered mic wins when the service runs
-        if "\tkyuma_mic" in ln:
+    for ln in lines:  # our global filtered mic wins when present
+        if "\tCleanMicLimited" in ln:
+            return ln.split()[1]
+    for ln in lines:
+        if "\tCleanMic" in ln and "Limited" not in ln:
             return ln.split()[1]
     alsa = [ln.split()[1] for ln in lines if "\talsa_input." in ln]
     if alsa:

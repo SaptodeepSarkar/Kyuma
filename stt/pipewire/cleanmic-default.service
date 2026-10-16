@@ -1,0 +1,12 @@
+[Unit]
+Description=Set CleanMicLimited as default source (oneshot, exits immediately)
+After=pipewire.service wireplumber.service
+Wants=pipewire.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'for i in $(seq 1 30); do pactl list sources short 2>/dev/null | grep -q "CleanMicLimited" && exec pactl set-default-source CleanMicLimited; sleep 1; done; exit 1'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=default.target
