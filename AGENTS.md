@@ -27,5 +27,5 @@ Source of truth: Obsidian vault `Projects/Kyuma/` (`README.md`, `PRD/`, `Flows/`
 - No new top-level services without updating `docs/architecture.md` and vault `Projects/Kyuma/Flows/Working flow.canvas`.
 - Empty repo: check `docs/` + vault before scaffolding anything.
 - Audio pitfall (2026-10-13): repeated `pw-record` mic capture flips Bluetooth headsets into HSP/HFP calling mode (low quality). Never leave mic capture running; restore A2DP with `pactl set-card-profile <bt-card> a2dp-sink` if it happens.
-- Mic rule: default is the built-in mic (`alsa_input` auto-pick, `KYUMA_MIC_TARGET` overrides) to protect music from the BT HSP flip — NOT because the earbuds mic is bad (it transcribes fine); it's a Bluetooth profile tradeoff.
+- Mic rule: default input is `CleanMicLimited` (native PipeWire RNNoise+limiter chain, `stt/pipewire/`; suspends at idle, zero extra processes). Falls back to `alsa_input` auto-pick. `KYUMA_MIC_TARGET` overrides. Never capture `bluez_input` (forces HSP music-kill) unless the user explicitly asks.
 - UI: QML overlay (`quickshell -p ui/shell.qml`) spawns with `start` by default per user decision (indicator is required); `--no-ui` skips it. If Caelestia freezes, suspect the second QS instance first. Hyprland toasts (`harness/notifier.py`) fire regardless as backup.
