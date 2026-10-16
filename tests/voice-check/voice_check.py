@@ -160,6 +160,19 @@ def collect(samples_dir: str, phrases: list[str], target: str | None) -> list[st
             proc.wait()
         size = os.path.getsize(path) if os.path.exists(path) else 0
         print(f"  saved {path} ({size // 1024} KB)")
+        # Immediate capture check: all-zero file = broken chain, re-record now.
+        try:
+            import math as _math
+            import struct as _struct
+            import wave as _wave
+            with _wave.open(path, "rb") as _w:
+                _raw = _w.readframes(_w.getnframes())
+            _s = _struct.unpack("<%dh" % (len(_raw) // 2), _raw) if _raw else (0,)
+            if _s and max(abs(_x) for _x in _s) == 0:
+                print("  WARNING: captured digital silence — mic chain delivered nothing; "
+                      "check source (pactl list sources) and re-record this phrase")
+        except Exception as _e:  # noqa: BLE001 -- never block collecting
+            print(f"  (capture check skipped: {_e})")
         saved.append(path)
     print(f"done: {len(saved)} samples in {samples_dir}")
     return saved
