@@ -166,7 +166,15 @@ _ALIASES: dict[str, dict[str, str]] = {
 def normalize(action: str, args: dict[str, Any]) -> dict[str, Any]:
     """Rewrite prompt-style arg keys to handler-style keys (copy, no mutate)."""
     mapping = _ALIASES.get(action, {})
-    return {mapping.get(k, k): v for k, v in args.items()}
+    out = {mapping.get(k, k): v for k, v in args.items()}
+    # Drop prompt-echo artifacts (model sometimes copies "/no_think" in).
+    out = {k: v for k, v in out.items()
+           if not (isinstance(v, str) and "no_think" in v)}
+    # Model sometimes drops "op" but gives the payload: infer set.
+    if action in ("volume", "brightness", "music") and "op" not in out:
+        if "level" in out or "value" in out:
+            out["op"] = "set"
+    return out
 
 
 def decide_normalized(decide_fn: DecideFn) -> DecideFn:

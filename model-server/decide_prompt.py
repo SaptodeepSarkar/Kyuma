@@ -68,14 +68,15 @@ Rules:
 
 def build_request(sentence: str, no_think: bool = True) -> dict[str, Any]:
     """llama.cpp /v1/chat/completions body: temp 0, thinking off, GBNF schema."""
-    # Qwen3 thinks by default; `enable_thinking` is ignored by some server
-    # builds, so also append the template-native `/no_think` suffix (harmless
-    # to drop for non-thinking models via no_think=False).
+    # The "/no_think" suffix is load-bearing for accuracy (bake-off 96.7%
+    # was measured WITH it; dropping it flips edge cases like "skip this
+    # track"). The model occasionally echoes it as an arg value, which
+    # harness.loop.normalize strips. Qwen2.5 has no thinking mode anyway.
     user = sentence + " /no_think" if no_think else sentence
     return {
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user},
+            {"role": "user", "content": sentence},
         ],
         "temperature": 0.0,
         "enable_thinking": False,  # honored by newer servers; /no_think covers the rest
