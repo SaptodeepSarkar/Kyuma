@@ -116,7 +116,8 @@ def _loop_cmd() -> list[str]:
     override = os.environ.get("KYUMA_LOOP_CMD")
     if override:
         return shlex.split(override)
-    return [sys.executable, os.path.join(REPO, "harness", "loop.py")]
+    return [sys.executable, os.path.join(REPO, "harness", "loop.py"),
+            "--server", f"http://127.0.0.1:{MODEL_PORT}"]
 
 
 def _ui_cmd() -> list[str] | None:
